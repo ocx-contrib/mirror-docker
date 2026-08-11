@@ -1,0 +1,137 @@
+# Shared base for every spec in this repository.
+#
+# `extends:` is a SHALLOW merge of top-level keys — a child that sets any key
+# below replaces it whole, there is no per-key merge into these blocks. Keep
+# what is genuinely repo-wide here; anything a package owns (name, target,
+# source, assets/variants, asset_type, metadata, catalog, tests, versions,
+# announce) stays in the package's own mirror.yml.
+#
+# Not a spec: it has no `name`/`target`/`source` and is never loaded on its
+# own — only merged under a child.
+
+skip_prereleases: true
+cascade: true
+
+# `date`, not `none`: a cascade tag (`latest`, `X`, `X.Y`) re-points on every
+# re-publish, and without a build segment the new manifest reuses the version
+# tag, orphaning the prior digest for registry GC to reap — which breaks any
+# `@sha256:` pin. Upstream versions here are plain `X.Y.Z` with no semver build
+# metadata of their own, so `date` adds a segment rather than colliding with one
+# (the python-build-standalone trap does not apply).
+build_timestamp: date
+
+verify:
+  github_asset_digest: true
+
+concurrency:
+  max_downloads: 8
+  max_bundles: 4
+  max_pushes: 2
+  rate_limit_ms: 100
+  max_retries: 3
+  compression_threads: 0
+
+platforms:
+  # SUPERSET across every package in the repo — not any one package's platform
+  # set. Do not trim it to match the spec you are reading. A platform declared
+  # here but absent from a package's `assets:` costs nothing: it never enters a
+  # version's resolved platform set, so the leg skips it and push never
+  # evaluates it. The reverse is fatal — a platform that resolves an asset but
+  # has no entry here has no test leg, so push reds it as `missing_junit` and
+  # never publishes it.
+  #
+  # Two Linux libc families appear below as FOUR distinct keys, because the
+  # helpers in this repo genuinely differ (measured, see each spec's own
+  # evidence block):
+  #
+  #   bare linux/{amd64,arm64}          docker-credential-pass — fully static,
+  #                                     requires no libc, so it must be proven
+  #                                     under musl as well as glibc.
+  #   linux/{amd64,arm64}+libc.glibc    docker-credential-secretservice —
+  #                                     dynamically linked, needs glibc AND
+  #                                     libsecret, so no alpine leg and each
+  #                                     leg installs the library by hand.
+  #
+  # Keeping both families here rather than in the specs is what lets every spec
+  # inherit `platforms:` untouched — no child restates this block, so the
+  # shallow-merge trap that once shipped four fleet specs with no container
+  # legs at all cannot bite here.
+
+  # ── static keys: docker-credential-pass ────────────────────────────────────
+  linux/amd64:
+    runner: ubuntu-latest
+    containers:
+      # alpine is the whole point of the bare key: an empty `os.features` is a
+      # positive claim that the artifact loads under ANY Linux userland, and a
+      # glibc-only matrix can never show that. Verified locally before the
+      # first push — the v0.9.8 pass binary runs on alpine:3.20 untouched.
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+  linux/arm64:
+    # arm64 container legs run natively — no qemu — so the runner arch must
+    # match the platform or the renderer's guard reds the leg up front.
+    runner: ubuntu-24.04-arm
+    containers:
+      - { image: "ubuntu:24.04", shell: bash }
+      - { image: "alpine:3.20",  shell: sh }
+      - { image: "fedora:40",    shell: bash }
+
+  # ── glibc keys: docker-credential-secretservice ────────────────────────────
+  #
+  # No alpine leg, deliberately — the binary's PT_INTERP is the glibc loader,
+  # so an alpine leg would red with a bare ENOENT on a path that plainly
+  # exists, asserting something this package has never promised.
+  #
+  # `setup:` installs the ONE runtime library the stock images lack. Without it
+  # every leg dies before main with
+  #   error while loading shared libraries: libsecret-1.so.0
+  # which reads like an artifact defect and is not one. Measured, not assumed:
+  # both commands below were run against the real v0.9.8 binary in the exact
+  # images named here, failing before and printing the version after.
+  #
+  # libsecret pulls glib/gio/gobject as its own dependencies, so one package
+  # per distro covers the whole DT_NEEDED closure.
+  "linux/amd64+libc.glibc":
+    runner: ubuntu-latest
+    containers:
+      - image: "ubuntu:24.04"
+        shell: bash
+        setup:
+          - apt-get update
+          - apt-get install -y libsecret-1-0
+      - image: "fedora:40"
+        shell: bash
+        setup: [dnf install -y libsecret]
+  "linux/arm64+libc.glibc":
+    runner: ubuntu-24.04-arm
+    containers:
+      - image: "ubuntu:24.04"
+        shell: bash
+        setup:
+          - apt-get update
+          - apt-get install -y libsecret-1-0
+      - image: "fedora:40"
+        shell: bash
+        setup: [dnf install -y libsecret]
+
+  # ── native legs ────────────────────────────────────────────────────────────
+  darwin/amd64:
+    # Intel slice tested on the arm64 macos-14 runner via Rosetta 2 (GitHub's
+    # macos-13 Intel pool is exhausted and deadlocks the push job).
+    runner: macos-14
+  darwin/arm64:
+    runner: macos-14
+  windows/amd64:
+    runner: windows-latest
+    shell: pwsh
+  windows/arm64:
+    # Native arm64 Windows runner — the amd64 pool cannot execute an arm64 PE,
+    # and there is no Rosetta equivalent to lean on.
+    runner: windows-11-arm
+    shell: pwsh
+
+notify:
+  discord:
+    webhook_secret: OCX_MIRROR_DISCORD_HOOK
+    user_id: "227748867204972545"  # pinged in-message on failures

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Docker credential helpers">
+  <g fill="#1D63ED">
+    <!-- container stack -->
+    <rect x="152" y="196" width="54" height="46" rx="4"/>
+    <rect x="214" y="196" width="54" height="46" rx="4"/>
+    <rect x="276" y="196" width="54" height="46" rx="4"/>
+    <rect x="214" y="142" width="54" height="46" rx="4"/>
+    <rect x="276" y="142" width="54" height="46" rx="4"/>
+    <rect x="276" y="88"  width="54" height="46" rx="4"/>
+    <!-- whale body -->
+    <path d="M470 250c-13 0-25 2-34 6-5-33-27-49-29-51l-9-7-6 10c-8 12-11 26-10 39 1 8 4 17 9 24-6 3-17 8-33 8H63c-7 0-13 6-13 13-1 24 3 48 12 70 10 24 26 42 46 52 23 11 60 18 102 18 20 0 40-2 60-6 27-5 53-15 77-29 20-12 37-28 51-46 24-30 38-64 48-94h4c25 0 40-10 48-19 6-5 10-12 13-19l4-11z"/>
+  </g>
+</svg>

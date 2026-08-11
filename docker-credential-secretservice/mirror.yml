@@ -1,0 +1,162 @@
+extends: ../mirror-base.yml
+
+name: docker-credential-secretservice
+
+# Logical index package `docker/docker-credential-secretservice` lives at the
+# physical path `ghcr.io/ocx-contrib/docker/docker-credential-secretservice` —
+# slash segments, never hyphen-flattened. The first segment must be this repo's
+# own owner or `GITHUB_TOKEN` cannot create the package.
+#
+# The package segment repeats the `docker-credential-` prefix on purpose: it is
+# the name Docker looks up on `PATH` for `credsStore: "secretservice"`, so it
+# has to survive into `asset_type.name` regardless.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/docker/docker-credential-secretservice
+
+source:
+  type: github_release
+  owner: docker
+  repo: docker-credential-helpers
+  # See ../docker-credential-pass/mirror.yml for the full tag survey. Same
+  # upstream repository, same release train: plain `vX.Y.Z`, with two
+  # `vX.Y.Z-beta.N` prereleases at v0.7.0 (below this mirror's floor). The
+  # optional group describes upstream's GRAMMAR so that `skip_prereleases`
+  # (mirror-base.yml) stays the single knob that decides release POLICY.
+  tag_pattern: "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:-beta\\.\\d+)?)$"
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# UNLIKE its sibling docker-credential-pass, this helper is DYNAMICALLY LINKED
+# against glibc, so both Linux keys below carry `+libc.glibc`. Measured on the
+# real v0.9.8 assets, both arches:
+#
+#   $ file docker-credential-secretservice-v0.9.8.linux-amd64
+#   ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked,
+#   interpreter /lib64/ld-linux-x86-64.so.2, for GNU/Linux 3.2.0, …, stripped
+#
+#   $ file docker-credential-secretservice-v0.9.8.linux-arm64
+#   ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), dynamically linked,
+#   interpreter /lib/ld-linux-aarch64.so.1, for GNU/Linux 3.7.0, …, stripped
+#
+#   $ readelf -d <either> | grep NEEDED
+#   libsecret-1.so.0  libgio-2.0.so.0  libgobject-2.0.so.0  libglib-2.0.so.0
+#   libc.so.6
+#
+# So the closure runs well past libc — and `os.features` carries a libc FAMILY
+# and nothing else, which is why ../mirror-base.yml provisions libsecret on
+# each container leg via `containers[].setup` rather than declaring it here.
+# There is no spec field that can express "needs libsecret"; the CATALOG.md
+# beside this file is where a consumer learns it.
+#
+# The glibc symbol floor was measured PER ARCH rather than extrapolated, and it
+# RISES across the mirrored range — so the container images must clear the
+# NEWEST floor, not the oldest:
+#
+#   $ readelf -V <bin> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+#   v0.9.8  x86_64  → GLIBC_2.34    (full set: 2.2.5, 2.3.2, 2.14, 2.32, 2.34)
+#   v0.9.8  aarch64 → GLIBC_2.34    (full set: 2.17, 2.32, 2.34)
+#   v0.8.0  x86_64  → GLIBC_2.14    (and it still NEEDs libpthread.so.0, which
+#                                    merged into libc at glibc 2.34 — the tell
+#                                    that upstream changed toolchains mid-range)
+#
+# GLIBC_2.34 excludes Ubuntu 20.04 (2.31), Debian 11 (2.31) and RHEL 8 (2.28).
+# Both container images in ../mirror-base.yml carry glibc 2.39, clearing it with
+# room. Nothing in the spec expresses a floor, so this decides the images and
+# nothing else — it is recorded here because it is not recoverable later.
+#
+# NO ALPINE LEG, and that is the deliberate other half of the `+libc.glibc`
+# decision. Upstream publishes no musl build of this helper; an alpine leg would
+# red with a bare ENOENT on a path that plainly exists (the loader reporting a
+# missing interpreter) and would assert something this package has never
+# promised.
+#
+# ─── Asset scope (Phase 2, both directions) ────────────────────────────────
+#
+# Each regex matches EXACTLY ONE asset at v0.8.0 (the floor), v0.9.0 and v0.9.8
+# (newest) — 0 matches is a SILENT skip, so the check ran forward across the
+# range. Asset naming is byte-identical across all 12 in-range releases.
+#
+# This helper ships LINUX ONLY — there is no darwin or windows asset in any
+# release, which is correct: the Secret Service API is a freedesktop.org D-Bus
+# interface. So this spec has no staged later passes; the two keys below are its
+# complete platform set.
+#
+# Deliberately EXCLUDED (the anchored ^…$ already prevents every one):
+#
+#   docker-credential-secretservice-*.linux-armv6      no OCX platform key —
+#   docker-credential-secretservice-*.linux-armv7      Architecture is Amd64 and
+#   docker-credential-secretservice-*.linux-ppc64le    Arm64 only, everything
+#   docker-credential-secretservice-*.linux-s390x      else is commented out in
+#                                                      ocx_lib/src/oci/platform/architecture.rs
+#   docker-credential-pass-*                           a different package here
+#   docker-credential-osxkeychain-*                    a different package here
+#   docker-credential-wincred-*.exe                    a different package here
+#   checksums.txt                                      digest sidecar —
+#                                                      `verify.github_asset_digest`
+#                                                      reads GitHub's own digest
+#
+# The `-v.*` middle is load-bearing: the asset name carries the version
+# (`…-secretservice-v0.9.8.linux-amd64`), so a pattern without it matches
+# nothing and silently skips the platform.
+assets:
+  "linux/amd64+libc.glibc":
+    - "^docker-credential-secretservice-v.*\\.linux-amd64$"
+  "linux/arm64+libc.glibc":
+    - "^docker-credential-secretservice-v.*\\.linux-arm64$"
+
+asset_type:
+  # A raw binary, not an archive. `name` is the RENAME TARGET: the asset arrives
+  # as `docker-credential-secretservice-v0.9.8.linux-amd64` and the bundle must
+  # ship it as `docker-credential-secretservice`, because that is the literal
+  # name `docker login` and ocx's own registry auth look up on `PATH` when
+  # ~/.docker/config.json says `"credsStore": "secretservice"`.
+  #
+  # No per-platform override: this spec publishes Linux only, and the asset
+  # carries no extension.
+  type: binary
+  name: docker-credential-secretservice
+
+# `off`, and it has to be: a single executable at the bundle content root means
+# the only honest PATH is a bare `${installPath}`, which `auto`/`verify` reject
+# at spec load with exit 65 rather than publish `binaries: []`. `binaries` is
+# therefore hand-declared in metadata.json.
+bin_scan: off
+
+metadata:
+  # Paths resolve against THIS spec's directory, not the repo root.
+  default: metadata.json
+
+catalog:
+  # `catalog.*` resolves against THIS spec's directory and the default probe
+  # looks only there, so the repo-root logo has to be named explicitly.
+  logo: ../logo.svg
+
+versions:
+  # 0.8.0 is the floor the package request asked for; both platforms this spec
+  # declares are present and identically named in all 12 releases from here to
+  # v0.9.8, so no per-platform `min_version` is needed.
+  min: "0.8.0"
+  new_per_run: 5
+  # Hash-staggered, NOT hand-picked and never "0 */6 * * *" —
+  # sha3_256("docker/docker-credential-secretservice") % 360 → slot 11.
+  # Regenerate with:
+  #   python3 .claude/skills/create-mirror/scripts/poll_stagger.py \
+  #     docker/docker-credential-secretservice
+  poll_interval: "11 0-23/6 * * *"
+
+tests:
+  # `script:` paths resolve from the REPOSITORY ROOT, not from this spec's
+  # directory — the opposite of `metadata.default` and `catalog.*` above.
+  - name: smoke
+    script: docker-credential-secretservice/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate:
+  #   $ gh api repos/docker/docker-credential-helpers/license --jq '.license.spdx_id'
+  #   MIT
+  org.opencontainers.image.licenses: "MIT"
+
+announce:
+  package: docker/docker-credential-secretservice
+  fork: ocx-contrib/index

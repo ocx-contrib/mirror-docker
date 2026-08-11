@@ -1,0 +1,182 @@
+extends: ../mirror-base.yml
+
+name: docker-credential-pass
+
+# Logical index package `docker/docker-credential-pass` lives at the physical
+# path `ghcr.io/ocx-contrib/docker/docker-credential-pass` — slash segments,
+# never hyphen-flattened. The first segment must be this repo's own owner or
+# `GITHUB_TOKEN` cannot create the package. Linkage to this repo comes from the
+# `org.opencontainers.image.source` annotation the pipeline writes.
+#
+# The package segment repeats the `docker-credential-` prefix on purpose: it is
+# the name Docker looks up on `PATH` for `credsStore: "pass"`, so it has to
+# survive into `asset_type.name` regardless, and a bare `docker/pass` would
+# hide the connection.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/docker/docker-credential-pass
+
+source:
+  type: github_release
+  owner: docker
+  repo: docker-credential-helpers
+  # Upstream tags are `vX.Y.Z`, with two `vX.Y.Z-beta.N` prereleases at v0.7.0.
+  # Observed 2026-08-11 over all 28 releases:
+  #
+  #   $ gh api "repos/docker/docker-credential-helpers/releases?per_page=30" \
+  #       --jq '.[] | "\(.tag_name)\tprerelease=\(.prerelease)"'
+  #   v0.9.8          prerelease=false
+  #   …
+  #   v0.7.0-beta.2   prerelease=true
+  #   v0.7.0-beta.1   prerelease=true
+  #
+  # The `(?:-beta\.\d+)?` group is deliberate even though both betas sit below
+  # this mirror's 0.8.0 floor. A pattern that structurally cannot match a
+  # prerelease conflates upstream's tag GRAMMAR with this mirror's release
+  # POLICY, and then `skip_prereleases` (mirror-base.yml) is decorative —
+  # flipping it would change nothing. Here the pattern describes what docker
+  # tags and `skip_prereleases: true` is the single knob deciding what ships.
+  tag_pattern: "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:-beta\\.\\d+)?)$"
+
+# ─── libc gate (Phase 3.5) — the evidence, not the conclusion ───────────────
+#
+# This helper is FULLY STATIC on both Linux arches, so it requires no libc at
+# all and the platform keys below are BARE. Measured on the real v0.9.8 assets:
+#
+#   $ file docker-credential-pass-v0.9.8.linux-amd64
+#   ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked,
+#   Go BuildID=Z-y8CVwUBEBP-…, BuildID[sha1]=8036aa22…, stripped
+#
+#   $ file docker-credential-pass-v0.9.8.linux-arm64
+#   ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked,
+#   Go BuildID=IyOEiXVexTCy49j8Ernj/…, stripped
+#
+#   $ readelf -l  <either> | grep -A1 INTERP   → no PT_INTERP segment
+#   $ readelf -d  <either> | grep NEEDED       → no DT_NEEDED entries
+#   $ readelf -V  <either> | grep GLIBC_       → no versioned GLIBC symbols
+#
+# No interpreter, no shared-library closure, no glibc symbol floor to measure —
+# nothing for a userland to fail to provide. Tagging it `+libc.musl` because Go
+# builds it against musl-compatible syscalls would be a FALSE REQUIREMENT: it
+# would claim the artifact needs a musl userland and hide it from every glibc
+# host it runs on perfectly well. Tagging it `+libc.glibc` is the same error
+# mirrored. The bare key is the honest one.
+#
+# Checked at BOTH ends of the range, not just the newest — upstream changed Go
+# toolchains mid-series (v0.8.0's secretservice still carries libpthread.so.0,
+# which merged into libc at glibc 2.34), so static-ness was not extrapolated:
+#
+#   $ file docker-credential-pass-v0.8.0.linux-amd64   → statically linked
+#
+# The alpine container leg in ../mirror-base.yml is what turns that bare claim
+# into evidence rather than an assertion; it was run locally before the first
+# push and the binary printed its version under musl untouched.
+#
+# ─── Asset scope (Phase 2, both directions) ────────────────────────────────
+#
+# Each regex matches EXACTLY ONE asset at v0.8.0 (the floor), v0.9.0 and v0.9.8
+# (newest) — 0 matches is a SILENT skip, so the check ran forward across the
+# range, and the inverse pass enumerated every remaining asset in the release to
+# confirm each is deliberately out of scope. Asset naming is byte-identical
+# across all 12 in-range releases; there is no per-version drift to defend.
+#
+# Deliberately EXCLUDED (the anchored ^…$ already prevents every one):
+#
+#   docker-credential-pass-*.linux-armv6      no OCX platform key — the
+#   docker-credential-pass-*.linux-armv7      Architecture enum is Amd64 and
+#   docker-credential-pass-*.linux-ppc64le    Arm64 only, everything else is
+#   docker-credential-pass-*.linux-s390x      commented out upstream in
+#                                             ocx_lib/src/oci/platform/architecture.rs
+#   docker-credential-osxkeychain-*           a different package in this repo
+#   docker-credential-secretservice-*         a different package in this repo
+#   docker-credential-wincred-*.exe           a different package in this repo
+#   checksums.txt                             digest sidecar —
+#                                             `verify.github_asset_digest`
+#                                             reads GitHub's own asset digest
+#
+# The `-v.*` middle is load-bearing: the asset name carries the version
+# (`…-pass-v0.9.8.linux-amd64`), so a pattern without it matches nothing and
+# silently skips the platform.
+assets:
+  linux/amd64:
+    - "^docker-credential-pass-v.*\\.linux-amd64$"
+  linux/arm64:
+    - "^docker-credential-pass-v.*\\.linux-arm64$"
+  # ── Pass 2 (darwin) — STAGED, uncomment as one commit ─────────────────────
+  # Upstream ships pass for macOS too, and it is a real use case: it is the
+  # headless/gpg alternative to the login Keychain. Both assets exist and are
+  # identically named in all 12 in-range releases. Not a fat binary — one file
+  # per arch, so both keys are declared separately.
+  # darwin/amd64:
+  #   - "^docker-credential-pass-v.*\\.darwin-amd64$"
+  # darwin/arm64:
+  #   - "^docker-credential-pass-v.*\\.darwin-arm64$"
+
+asset_type:
+  # A raw binary, not an archive — upstream publishes the executable itself,
+  # with no wrapper and no compression. `name` is the RENAME TARGET: the asset
+  # arrives as `docker-credential-pass-v0.9.8.linux-amd64` and the bundle must
+  # ship it as `docker-credential-pass`, because that is the literal name
+  # `docker login` and ocx's own registry auth look up on `PATH` when
+  # `~/.docker/config.json` says `"credsStore": "pass"`. Getting this wrong
+  # publishes a working binary that nothing can find.
+  #
+  # No per-platform override: neither the Linux nor the macOS asset carries an
+  # extension, so one name serves every platform this spec declares. (The
+  # sibling wincred spec does need one — `.exe`.)
+  type: binary
+  name: docker-credential-pass
+
+# `off`, and it has to be: this is a single executable at the bundle content
+# root, so the only honest PATH is a bare `${installPath}`. `auto` and `verify`
+# both scan for `${installPath}/<subdir>` entries, find none here, and the spec
+# is rejected at load with exit 65 rather than publish `binaries: []` — a
+# positive claim that the package exposes no commands. `binaries` is therefore
+# hand-declared in metadata.json and is exactly one name.
+bin_scan: off
+
+metadata:
+  # Paths resolve against THIS spec's directory, not the repo root.
+  # One file: a single binary at the content root, on every platform.
+  default: metadata.json
+
+catalog:
+  # `catalog.*` resolves against THIS spec's directory and the default probe
+  # looks only there, so the repo-root logo shared by every package in this
+  # repo has to be named explicitly — a nested spec that omits this ships with
+  # no logo and no error. CATALOG.md is found beside this file by the default
+  # probe.
+  logo: ../logo.svg
+
+versions:
+  # 0.8.0 is the floor the package request asked for, and it is also where the
+  # asset matrix becomes uniform: every platform this spec declares is present
+  # and identically named in all 12 releases from here to v0.9.8, so no
+  # per-platform `min_version` is needed.
+  min: "0.8.0"
+  new_per_run: 5
+  # Hash-staggered, NOT hand-picked and never "0 */6 * * *" —
+  # sha3_256("docker/docker-credential-pass") % 360 → slot 36. Fleet-synchronized
+  # crons burst-pushed to GHCR together and tripped its secondary rate limit on
+  # 2026-08-04. Regenerate with:
+  #   python3 .claude/skills/create-mirror/scripts/poll_stagger.py \
+  #     docker/docker-credential-pass
+  poll_interval: "36 0-23/6 * * *"
+
+tests:
+  # `script:` paths resolve from the REPOSITORY ROOT, not from this spec's
+  # directory — the opposite of `metadata.default` and `catalog.*` above.
+  - name: smoke
+    script: docker-credential-pass/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate:
+  #   $ gh api repos/docker/docker-credential-helpers/license --jq '.license.spdx_id'
+  #   MIT
+  org.opencontainers.image.licenses: "MIT"
+
+announce:
+  # Spelled out, not derived from target.repository — the logical name and the
+  # physical path are related by convention only.
+  package: docker/docker-credential-pass
+  fork: ocx-contrib/index
