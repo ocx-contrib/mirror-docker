@@ -1,0 +1,138 @@
+extends: ../mirror-base.yml
+
+name: docker-credential-osxkeychain
+
+# Logical index package `docker/docker-credential-osxkeychain` lives at the
+# physical path `ghcr.io/ocx-contrib/docker/docker-credential-osxkeychain` —
+# slash segments, never hyphen-flattened. The first segment must be this repo's
+# own owner or `GITHUB_TOKEN` cannot create the package.
+#
+# The package segment repeats the `docker-credential-` prefix on purpose: it is
+# the name Docker looks up on `PATH` for `credsStore: "osxkeychain"`, so it has
+# to survive into `asset_type.name` regardless.
+target:
+  registry: ghcr.io
+  repository: ocx-contrib/docker/docker-credential-osxkeychain
+
+source:
+  type: github_release
+  owner: docker
+  repo: docker-credential-helpers
+  # See ../docker-credential-pass/mirror.yml for the full tag survey. Same
+  # upstream repository, same release train: plain `vX.Y.Z`, with two
+  # `vX.Y.Z-beta.N` prereleases at v0.7.0 (below this mirror's floor). The
+  # optional group describes upstream's GRAMMAR so that `skip_prereleases`
+  # (mirror-base.yml) stays the single knob that decides release POLICY.
+  tag_pattern: "^v(?P<version>\\d+\\.\\d+\\.\\d+(?:-beta\\.\\d+)?)$"
+
+# ─── Linkage (Phase 3.5) — no libc gate applies, but measured anyway ────────
+#
+# macOS has a single libc family, so no platform key here carries a `+libc.*`
+# suffix and no container legs exist (`containers:` on darwin/* is rejected at
+# spec load). What was still worth measuring is that these are real per-arch
+# Mach-O executables rather than one fat binary — because that decides whether
+# the two darwin keys share an asset or take one each:
+#
+#   $ file docker-credential-osxkeychain-v0.9.8.darwin-amd64
+#   Mach-O 64-bit x86_64 executable, flags:<NOUNDEFS|DYLDLINK|TWOLEVEL|PIE>
+#
+#   $ file docker-credential-osxkeychain-v0.9.8.darwin-arm64
+#   Mach-O 64-bit arm64 executable, flags:<NOUNDEFS|DYLDLINK|TWOLEVEL|PIE>
+#
+# Two separate thin binaries, NOT a universal one (contrast mirror-kitware,
+# whose single `macos-universal` asset serves both darwin keys). So each key
+# below names its own asset.
+#
+# `NOUNDEFS` means every symbol is resolved at link time; the dynamic closure is
+# Security.framework, CoreFoundation, libresolv and libSystem — all shipped by
+# macOS itself. Unlike its `pass` and `secretservice` siblings this helper needs
+# nothing installed on the host: the login Keychain is an OS service. That is
+# why its CATALOG.md has no host-requirement section, and the absence is a
+# measurement rather than an oversight.
+#
+# ─── Asset scope (Phase 2, both directions) ────────────────────────────────
+#
+# Each regex matches EXACTLY ONE asset at v0.8.0 (the floor), v0.9.0 and v0.9.8
+# (newest) — 0 matches is a SILENT skip, so the check ran forward across the
+# range. Asset naming is byte-identical across all 12 in-range releases.
+#
+# This helper ships DARWIN ONLY — there is no linux or windows asset in any
+# release, which is correct: it wraps the macOS Keychain Services API. So the
+# two keys below are its complete platform set.
+#
+# Deliberately EXCLUDED (the anchored ^…$ already prevents every one):
+#
+#   docker-credential-pass-*             a different package in this repo — and
+#                                        note it ALSO ships darwin assets, which
+#                                        is exactly why these patterns are
+#                                        anchored on the full helper name rather
+#                                        than on the `.darwin-*` suffix
+#   docker-credential-secretservice-*    a different package in this repo
+#   docker-credential-wincred-*.exe      a different package in this repo
+#   checksums.txt                        digest sidecar —
+#                                        `verify.github_asset_digest` reads
+#                                        GitHub's own asset digest instead
+#
+# The `-v.*` middle is load-bearing: the asset name carries the version
+# (`…-osxkeychain-v0.9.8.darwin-arm64`), so a pattern without it matches nothing
+# and silently skips the platform.
+assets:
+  darwin/amd64:
+    - "^docker-credential-osxkeychain-v.*\\.darwin-amd64$"
+  darwin/arm64:
+    - "^docker-credential-osxkeychain-v.*\\.darwin-arm64$"
+
+asset_type:
+  # A raw binary, not an archive. `name` is the RENAME TARGET: the asset arrives
+  # as `docker-credential-osxkeychain-v0.9.8.darwin-arm64` and the bundle must
+  # ship it as `docker-credential-osxkeychain`, because that is the literal name
+  # `docker login` and ocx's own registry auth look up on `PATH` when
+  # ~/.docker/config.json says `"credsStore": "osxkeychain"`.
+  #
+  # No per-platform override: macOS assets carry no extension.
+  type: binary
+  name: docker-credential-osxkeychain
+
+# `off`, and it has to be: a single executable at the bundle content root means
+# the only honest PATH is a bare `${installPath}`, which `auto`/`verify` reject
+# at spec load with exit 65 rather than publish `binaries: []`. `binaries` is
+# therefore hand-declared in metadata.json.
+bin_scan: off
+
+metadata:
+  # Paths resolve against THIS spec's directory, not the repo root.
+  default: metadata.json
+
+catalog:
+  # `catalog.*` resolves against THIS spec's directory and the default probe
+  # looks only there, so the repo-root logo has to be named explicitly.
+  logo: ../logo.svg
+
+versions:
+  # 0.8.0 is the floor the package request asked for; both platforms this spec
+  # declares are present and identically named in all 12 releases from here to
+  # v0.9.8, so no per-platform `min_version` is needed.
+  min: "0.8.0"
+  new_per_run: 5
+  # Hash-staggered, NOT hand-picked and never "0 */6 * * *" —
+  # sha3_256("docker/docker-credential-osxkeychain") % 360 → slot 150.
+  # Regenerate with:
+  #   python3 .claude/skills/create-mirror/scripts/poll_stagger.py \
+  #     docker/docker-credential-osxkeychain
+  poll_interval: "30 2-23/6 * * *"
+
+tests:
+  # `script:` paths resolve from the REPOSITORY ROOT, not from this spec's
+  # directory — the opposite of `metadata.default` and `catalog.*` above.
+  - name: smoke
+    script: docker-credential-osxkeychain/tests/smoke.star
+
+annotations:
+  # From the Phase 1.5 license gate:
+  #   $ gh api repos/docker/docker-credential-helpers/license --jq '.license.spdx_id'
+  #   MIT
+  org.opencontainers.image.licenses: "MIT"
+
+announce:
+  package: docker/docker-credential-osxkeychain
+  fork: ocx-contrib/index

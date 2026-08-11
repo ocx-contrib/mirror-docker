@@ -102,15 +102,20 @@ assets:
     - "^docker-credential-pass-v.*\\.linux-amd64$"
   linux/arm64:
     - "^docker-credential-pass-v.*\\.linux-arm64$"
-  # ── Pass 2 (darwin) — STAGED, uncomment as one commit ─────────────────────
+  # ── Pass 2 (darwin) — LIVE ────────────────────────────────────────────────
   # Upstream ships pass for macOS too, and it is a real use case: it is the
   # headless/gpg alternative to the login Keychain. Both assets exist and are
   # identically named in all 12 in-range releases. Not a fat binary — one file
   # per arch, so both keys are declared separately.
-  # darwin/amd64:
-  #   - "^docker-credential-pass-v.*\\.darwin-amd64$"
-  # darwin/arm64:
-  #   - "^docker-credential-pass-v.*\\.darwin-arm64$"
+  #
+  # The sibling docker-credential-osxkeychain spec claims these same two darwin
+  # keys with its own assets. That is not a conflict: they are separate
+  # packages, and a macOS user picks between a GnuPG store and the login
+  # Keychain by installing one or the other.
+  darwin/amd64:
+    - "^docker-credential-pass-v.*\\.darwin-amd64$"
+  darwin/arm64:
+    - "^docker-credential-pass-v.*\\.darwin-arm64$"
 
 asset_type:
   # A raw binary, not an archive — upstream publishes the executable itself,
